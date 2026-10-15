@@ -99,3 +99,8 @@ open Package.swift
 1. 程序启动后，`SnifferServer` 会自动在 `127.0.0.1:37651` 监听浏览器扩展发送的 HTTP POST 请求。
 2. 当浏览器扩展检测到下载或视频时，将请求转发给本地程序，自动唤起“新建下载”或“清晰度选择”窗口。
 3. 即使程序未预先开启，浏览器通过网页点击 `tdmfast://` 协议链接时，macOS 会自动唤起本应用并将任务参数传递给下载引擎。
+
+### 🔗 官方浏览器嗅探扩展下载地址
+
+- **Microsoft Edge 加载项商店**：[TDM Fast 资源嗅探 - Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/fbhfbpinjmjhleidkgfjokfkcjgkjjkh)
+- **Google Chrome / 其他 Chromium 浏览器**：可直接通过 Edge 加载项商店安装，或访问官方网站 [tdmfast.com](https://tdmfast.com) 获取扩展程序。
