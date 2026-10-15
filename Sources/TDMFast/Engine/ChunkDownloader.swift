@@ -1,5 +1,7 @@
 import Foundation
+import Darwin
 
+/// High-performance chunk downloader using URLSessionDataDelegate + POSIX pwrite
 public actor ChunkDownloader {
     public struct ProbeResult {
         public let finalURL: URL
@@ -11,25 +13,15 @@ public actor ChunkDownloader {
     private let taskId: String
     private var isCancelled = false
     private var isPaused = false
-    private var session: URLSession
+    private var session: URLSession?
+    private let sessionDelegate = ChunkSessionDelegate()
+    private var activeDataTasks: [URLSessionDataTask] = []
 
     public init(taskId: String, proxyConfiguration: AppSettings? = nil) {
         self.taskId = taskId
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30.0
-        config.timeoutIntervalForResource = 3600.0
-
-        if let p = proxyConfiguration, p.proxyEnabled {
-            config.connectionProxyDictionary = [
-                kCFNetworkProxiesHTTPEnable as String: true,
-                kCFNetworkProxiesHTTPProxy as String: p.proxyHost,
-                kCFNetworkProxiesHTTPPort as String: p.proxyPort,
-                kCFNetworkProxiesHTTPSEnable as String: true,
-                kCFNetworkProxiesHTTPSProxy as String: p.proxyHost,
-                kCFNetworkProxiesHTTPSPort as String: p.proxyPort
-            ]
-        }
-        self.session = URLSession(configuration: config)
+        ProxyHelper.apply(to: config, userSettings: proxyConfiguration)
+        self.session = URLSession(configuration: config, delegate: self.sessionDelegate, delegateQueue: nil)
     }
 
     public static func probe(
@@ -38,16 +30,7 @@ public actor ChunkDownloader {
         proxyConfiguration: AppSettings? = nil
     ) async throws -> ProbeResult {
         let config = URLSessionConfiguration.default
-        if let p = proxyConfiguration, p.proxyEnabled {
-            config.connectionProxyDictionary = [
-                kCFNetworkProxiesHTTPEnable as String: true,
-                kCFNetworkProxiesHTTPProxy as String: p.proxyHost,
-                kCFNetworkProxiesHTTPPort as String: p.proxyPort,
-                kCFNetworkProxiesHTTPSEnable as String: true,
-                kCFNetworkProxiesHTTPSProxy as String: p.proxyHost,
-                kCFNetworkProxiesHTTPSPort as String: p.proxyPort
-            ]
-        }
+        ProxyHelper.apply(to: config, userSettings: proxyConfiguration)
         let session = URLSession(configuration: config)
 
         var request = URLRequest(url: url)
@@ -59,17 +42,16 @@ public actor ChunkDownloader {
             for (k, v) in custom { request.setValue(v, forHTTPHeaderField: k) }
         }
 
-        var (data, response) = try await session.data(for: request)
+        let (_, response) = try await session.data(for: request)
         guard var httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
 
-        // If HEAD is rejected with 405 Method Not Allowed or 403, retry with GET Range bytes=0-0
+        // Fallback for servers rejecting HEAD (405 or 403)
         if httpResponse.statusCode == 405 || httpResponse.statusCode == 403 {
             request.httpMethod = "GET"
             request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
-            let (dataRetry, responseRetry) = try await session.data(for: request)
-            data = dataRetry
+            let (_, responseRetry) = try await session.data(for: request)
             if let resp = responseRetry as? HTTPURLResponse {
                 httpResponse = resp
             }
@@ -85,7 +67,6 @@ public actor ChunkDownloader {
         }
 
         if let contentRange = httpResponse.value(forHTTPHeaderField: "Content-Range") {
-            // e.g. "bytes 0-0/1234567"
             supportsRange = true
             if let slashIdx = contentRange.lastIndex(of: "/") {
                 let sizeStr = contentRange[contentRange.index(after: slashIdx)...].trimmingCharacters(in: .whitespaces)
@@ -102,7 +83,6 @@ public actor ChunkDownloader {
             }
         }
 
-        // Filename resolution from Content-Disposition
         var filename = ""
         if let disposition = httpResponse.value(forHTTPHeaderField: "Content-Disposition") {
             if let match = disposition.range(of: "filename\\*?=['\"]?(?:UTF-8'')?([^;'\"]+)", options: .regularExpression) {
@@ -136,7 +116,7 @@ public actor ChunkDownloader {
         totalBytes: Int64,
         connections: Int,
         customHeaders: [String: String]?,
-        progressUpdate: @escaping (Int64, Int64, Int64) -> Void // downloadedBytes, speedBytesPerSec, etaSec
+        progressUpdate: @escaping (Int64, Int64, Int64, [Double]) -> Void
     ) async throws {
         isCancelled = false
         isPaused = false
@@ -145,21 +125,22 @@ public actor ChunkDownloader {
         let parentDir = destURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
 
-        let threadCount = (totalBytes > 0 && connections > 1) ? min(connections, 64) : 1
-
-        if !FileManager.default.fileExists(atPath: destinationPath) {
-            FileManager.default.createFile(atPath: destinationPath, contents: nil)
-            if totalBytes > 0 {
-                let fileHandle = try FileHandle(forWritingTo: destURL)
-                try fileHandle.truncate(atOffset: UInt64(totalBytes))
-                try fileHandle.close()
-            }
+        let fd = open(destinationPath, O_RDWR | O_CREAT, 0o644)
+        guard fd >= 0 else {
+            throw NSError(domain: "TDMFast", code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "无法创建或写入目标文件"])
         }
+        defer { close(fd) }
+
+        if totalBytes > 0 {
+            ftruncate(fd, off_t(totalBytes))
+        }
+
+        let threadCount = (totalBytes > 1024 * 1024 && connections > 1) ? min(connections, 32) : 1
 
         if threadCount == 1 || totalBytes <= 0 {
             try await downloadSingleStream(
                 url: url,
-                destURL: destURL,
+                fd: fd,
                 totalBytes: totalBytes,
                 customHeaders: customHeaders,
                 progressUpdate: progressUpdate
@@ -167,7 +148,7 @@ public actor ChunkDownloader {
         } else {
             try await downloadMultiChunk(
                 url: url,
-                destURL: destURL,
+                fd: fd,
                 totalBytes: totalBytes,
                 threadCount: threadCount,
                 customHeaders: customHeaders,
@@ -178,57 +159,64 @@ public actor ChunkDownloader {
 
     private func downloadSingleStream(
         url: URL,
-        destURL: URL,
+        fd: Int32,
         totalBytes: Int64,
         customHeaders: [String: String]?,
-        progressUpdate: @escaping (Int64, Int64, Int64) -> Void
+        progressUpdate: @escaping (Int64, Int64, Int64, [Double]) -> Void
     ) async throws {
+        guard let session = self.session else { throw URLError(.cancelled) }
+
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
         if let custom = customHeaders {
             for (k, v) in custom { request.setValue(v, forHTTPHeaderField: k) }
         }
 
-        let (asyncBytes, response) = try await session.bytes(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw URLError(.badServerResponse)
+        let tracker = ChunkProgressTracker(totalBytes: totalBytes, segmentCount: 1, progressUpdate: progressUpdate)
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var currentOffset: Int64 = 0
+            let task = session.dataTask(with: request)
+            self.activeDataTasks = [task]
+
+            sessionDelegate.register(taskId: task.taskIdentifier, onResponse: { _ in }, onData: { data in
+                let count = data.count
+                guard count > 0 else { return }
+                data.withUnsafeBytes { raw in
+                    if let ptr = raw.baseAddress {
+                        pwrite(fd, ptr, count, off_t(currentOffset))
+                    }
+                }
+                currentOffset += Int64(count)
+                Task {
+                    await tracker.updateSegment(
+                        index: 0,
+                        downloaded: currentOffset,
+                        total: max(totalBytes, currentOffset),
+                        deltaBytes: Int64(count)
+                    )
+                }
+            }, onCompletion: { error in
+                if let err = error {
+                    continuation.resume(throwing: err)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            })
+
+            task.resume()
         }
 
-        let fileHandle = try FileHandle(forWritingTo: destURL)
-        defer { try? fileHandle.close() }
-
-        var downloaded: Int64 = 0
-        var lastTick = Date()
-        var lastDownloaded: Int64 = 0
-        var speed: Int64 = 0
-
-        for try await byte in asyncBytes {
-            if isPaused || isCancelled { break }
-            try fileHandle.write(contentsOf: Data([byte]))
-            downloaded += 1
-
-            let now = Date()
-            let elapsed = now.timeIntervalSince(lastTick)
-            if elapsed >= 0.5 {
-                let delta = downloaded - lastDownloaded
-                speed = Int64(Double(delta) / elapsed)
-                let remaining = totalBytes > downloaded ? (totalBytes - downloaded) : 0
-                let eta = speed > 0 ? (remaining / speed) : 0
-                progressUpdate(downloaded, speed, eta)
-                lastTick = now
-                lastDownloaded = downloaded
-            }
-        }
-        progressUpdate(downloaded, 0, 0)
+        await tracker.finish()
     }
 
     private func downloadMultiChunk(
         url: URL,
-        destURL: URL,
+        fd: Int32,
         totalBytes: Int64,
         threadCount: Int,
         customHeaders: [String: String]?,
-        progressUpdate: @escaping (Int64, Int64, Int64) -> Void
+        progressUpdate: @escaping (Int64, Int64, Int64, [Double]) -> Void
     ) async throws {
         let chunkSize = Int64(ceil(Double(totalBytes) / Double(threadCount)))
         var segments: [FileSegment] = []
@@ -239,110 +227,234 @@ public actor ChunkDownloader {
             segments.append(FileSegment(index: i, startOffset: start, endOffset: end, downloadedBytes: 0))
         }
 
-        let progressTracker = ChunkProgressTracker(totalBytes: totalBytes, progressUpdate: progressUpdate)
+        let tracker = ChunkProgressTracker(totalBytes: totalBytes, segmentCount: threadCount, progressUpdate: progressUpdate)
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             for seg in segments {
                 group.addTask {
-                    try await self.downloadSegment(
+                    try await self.downloadSegmentWithRetry(
                         segment: seg,
                         url: url,
-                        destURL: destURL,
+                        fd: fd,
                         customHeaders: customHeaders,
-                        tracker: progressTracker
+                        tracker: tracker,
+                        maxRetries: 3
                     )
                 }
             }
             try await group.waitForAll()
         }
-        await progressTracker.finish()
+
+        await tracker.finish()
+    }
+
+    private func downloadSegmentWithRetry(
+        segment: FileSegment,
+        url: URL,
+        fd: Int32,
+        customHeaders: [String: String]?,
+        tracker: ChunkProgressTracker,
+        maxRetries: Int
+    ) async throws {
+        var attempt = 0
+        var currentDownloaded = segment.downloadedBytes
+
+        while attempt <= maxRetries {
+            if isPaused || isCancelled { return }
+            do {
+                try await downloadSegment(
+                    segment: segment,
+                    startFrom: currentDownloaded,
+                    url: url,
+                    fd: fd,
+                    customHeaders: customHeaders,
+                    tracker: tracker,
+                    onBytesReceived: { bytes in
+                        currentDownloaded += bytes
+                    }
+                )
+                return
+            } catch {
+                attempt += 1
+                if attempt > maxRetries || isPaused || isCancelled {
+                    throw error
+                }
+                // Exponential backoff before retry (500ms, 1000ms...)
+                try? await Task.sleep(nanoseconds: UInt64(attempt * 500_000_000))
+            }
+        }
     }
 
     private func downloadSegment(
         segment: FileSegment,
+        startFrom: Int64,
         url: URL,
-        destURL: URL,
+        fd: Int32,
         customHeaders: [String: String]?,
-        tracker: ChunkProgressTracker
+        tracker: ChunkProgressTracker,
+        onBytesReceived: @escaping (Int64) -> Void
     ) async throws {
+        guard let session = self.session else { throw URLError(.cancelled) }
+
+        let segmentStart = segment.startOffset + startFrom
+        if segmentStart > segment.endOffset { return }
+
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
-        request.setValue(segment.currentRangeHeader, forHTTPHeaderField: "Range")
+        request.setValue("bytes=\(segmentStart)-\(segment.endOffset)", forHTTPHeaderField: "Range")
         if let custom = customHeaders {
             for (k, v) in custom { request.setValue(v, forHTTPHeaderField: k) }
         }
 
-        let (asyncBytes, response) = try await session.bytes(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 206 || httpResponse.statusCode == 200 else {
-            throw URLError(.badServerResponse)
-        }
+        let totalSegmentLength = segment.endOffset - segment.startOffset + 1
 
-        let fileHandle = try FileHandle(forWritingTo: destURL)
-        defer { try? fileHandle.close() }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var currentOffset = segmentStart
+            var currentSegmentDownloaded = startFrom
 
-        var currentOffset = segment.startOffset
-        var buffer = Data()
-        buffer.reserveCapacity(65536)
+            let task = session.dataTask(with: request)
+            self.activeDataTasks.append(task)
 
-        for try await byte in asyncBytes {
-            if isPaused || isCancelled { break }
-            buffer.append(byte)
+            sessionDelegate.register(taskId: task.taskIdentifier, onResponse: { _ in }, onData: { data in
+                let count = data.count
+                guard count > 0 else { return }
 
-            if buffer.count >= 65536 {
-                try fileHandle.seek(toOffset: UInt64(currentOffset))
-                try fileHandle.write(contentsOf: buffer)
-                currentOffset += Int64(buffer.count)
-                await tracker.addBytes(Int64(buffer.count))
-                buffer.removeAll(keepingCapacity: true)
-            }
-        }
+                data.withUnsafeBytes { raw in
+                    if let ptr = raw.baseAddress {
+                        pwrite(fd, ptr, count, off_t(currentOffset))
+                    }
+                }
+                currentOffset += Int64(count)
+                currentSegmentDownloaded += Int64(count)
+                onBytesReceived(Int64(count))
 
-        if !buffer.isEmpty {
-            try fileHandle.seek(toOffset: UInt64(currentOffset))
-            try fileHandle.write(contentsOf: buffer)
-            await tracker.addBytes(Int64(buffer.count))
+                Task {
+                    await tracker.updateSegment(
+                        index: segment.index,
+                        downloaded: currentSegmentDownloaded,
+                        total: totalSegmentLength,
+                        deltaBytes: Int64(count)
+                    )
+                }
+            }, onCompletion: { error in
+                if let err = error {
+                    continuation.resume(throwing: err)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            })
+
+            task.resume()
         }
     }
 
     public func pause() {
         isPaused = true
+        for task in activeDataTasks {
+            task.cancel()
+        }
+        activeDataTasks.removeAll()
     }
 
     public func cancel() {
         isCancelled = true
-        session.invalidateAndCancel()
+        pause()
+        session?.invalidateAndCancel()
     }
 }
 
+/// Thread-safe URLSessionDataDelegate handling streaming data chunks
+final class ChunkSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private struct Callbacks {
+        var onResponse: ((HTTPURLResponse) -> Void)?
+        var onData: ((Data) -> Void)?
+        var onCompletion: ((Error?) -> Void)?
+    }
+
+    private let lock = NSLock()
+    private var callbacks: [Int: Callbacks] = [:]
+
+    func register(
+        taskId: Int,
+        onResponse: ((HTTPURLResponse) -> Void)? = nil,
+        onData: @escaping (Data) -> Void,
+        onCompletion: @escaping (Error?) -> Void
+    ) {
+        lock.lock()
+        callbacks[taskId] = Callbacks(onResponse: onResponse, onData: onData, onCompletion: onCompletion)
+        lock.unlock()
+    }
+
+    func unregister(taskId: Int) {
+        lock.lock()
+        callbacks.removeValue(forKey: taskId)
+        lock.unlock()
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        if let http = response as? HTTPURLResponse {
+            lock.lock()
+            let cb = callbacks[dataTask.taskIdentifier]?.onResponse
+            lock.unlock()
+            cb?(http)
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock()
+        let cb = callbacks[dataTask.taskIdentifier]?.onData
+        lock.unlock()
+        cb?(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        let cb = callbacks[task.taskIdentifier]?.onCompletion
+        callbacks.removeValue(forKey: task.taskIdentifier)
+        lock.unlock()
+        cb?(error)
+    }
+}
+
+/// Actor tracking real-time aggregated speed and per-segment thread progress
 private actor ChunkProgressTracker {
     let totalBytes: Int64
-    let progressUpdate: (Int64, Int64, Int64) -> Void
+    let segmentCount: Int
+    var segmentProgress: [Double]
+    let progressUpdate: (Int64, Int64, Int64, [Double]) -> Void
     var totalDownloaded: Int64 = 0
     var lastTick = Date()
     var lastDownloaded: Int64 = 0
 
-    init(totalBytes: Int64, progressUpdate: @escaping (Int64, Int64, Int64) -> Void) {
+    init(totalBytes: Int64, segmentCount: Int, progressUpdate: @escaping (Int64, Int64, Int64, [Double]) -> Void) {
         self.totalBytes = totalBytes
+        self.segmentCount = segmentCount
+        self.segmentProgress = Array(repeating: 0.0, count: segmentCount)
         self.progressUpdate = progressUpdate
     }
 
-    func addBytes(_ count: Int64) {
-        totalDownloaded += count
+    func updateSegment(index: Int, downloaded: Int64, total: Int64, deltaBytes: Int64) {
+        totalDownloaded += deltaBytes
+        if index >= 0 && index < segmentProgress.count && total > 0 {
+            segmentProgress[index] = min(1.0, max(0.0, Double(downloaded) / Double(total)))
+        }
+
         let now = Date()
         let elapsed = now.timeIntervalSince(lastTick)
-        if elapsed >= 0.5 {
+        if elapsed >= 0.25 {
             let delta = totalDownloaded - lastDownloaded
             let speed = Int64(Double(delta) / elapsed)
             let remaining = totalBytes > totalDownloaded ? (totalBytes - totalDownloaded) : 0
             let eta = speed > 0 ? (remaining / speed) : 0
-            progressUpdate(totalDownloaded, speed, eta)
+            progressUpdate(totalDownloaded, speed, eta, segmentProgress)
             lastTick = now
             lastDownloaded = totalDownloaded
         }
     }
 
     func finish() {
-        progressUpdate(totalDownloaded, 0, 0)
+        segmentProgress = Array(repeating: 1.0, count: segmentCount)
+        progressUpdate(totalDownloaded, 0, 0, segmentProgress)
     }
 }

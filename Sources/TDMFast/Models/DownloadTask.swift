@@ -17,6 +17,7 @@ public struct DownloadTask: Identifiable, Codable {
     public var completedAt: Date?
     public var errorMessage: String?
     public var customHeaders: [String: String]?
+    public var segmentProgress: [Double]?
 
     public var progress: Double {
         guard totalBytes > 0 else { return 0.0 }
@@ -68,5 +69,6 @@ public struct DownloadTask: Identifiable, Codable {
         self.formatSelector = formatSelector
         self.createdAt = Date()
         self.customHeaders = customHeaders
+        self.segmentProgress = nil
     }
 }

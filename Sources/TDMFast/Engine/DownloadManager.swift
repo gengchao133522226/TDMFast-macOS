@@ -124,12 +124,13 @@ public class DownloadManager: ObservableObject {
                     totalBytes: probe.totalBytes,
                     connections: task.connections,
                     customHeaders: task.customHeaders
-                ) { [weak self] downloaded, speed, eta in
+                ) { [weak self] downloaded, speed, eta, segmentProgress in
                     Task { @MainActor [weak self] in
                         guard let self = self, let idx = self.tasks.firstIndex(where: { $0.id == task.id }) else { return }
                         self.tasks[idx].downloadedBytes = downloaded
                         self.tasks[idx].speed = speed
                         self.tasks[idx].etaSeconds = eta
+                        self.tasks[idx].segmentProgress = segmentProgress
                     }
                 }
 
@@ -137,6 +138,7 @@ public class DownloadManager: ObservableObject {
                     self.tasks[idx].status = .completed
                     self.tasks[idx].speed = 0
                     self.tasks[idx].etaSeconds = 0
+                    self.tasks[idx].segmentProgress = nil
                     self.tasks[idx].completedAt = Date()
                     self.saveTasks()
                     self.notifyTaskCompleted(filename: self.tasks[idx].filename)
@@ -162,12 +164,13 @@ public class DownloadManager: ObservableObject {
         let process = YtDlpService.shared.runDownload(
             task: task,
             settings: settings,
-            progressHandler: { [weak self] downloaded, total, speed, actualFilename in
+            progressHandler: { [weak self] downloaded, total, speed, eta, actualFilename in
                 Task { @MainActor [weak self] in
                     guard let self = self, let idx = self.tasks.firstIndex(where: { $0.id == task.id }) else { return }
                     if total > 0 { self.tasks[idx].totalBytes = total }
                     self.tasks[idx].downloadedBytes = downloaded
                     self.tasks[idx].speed = speed
+                    self.tasks[idx].etaSeconds = eta
                     if let af = actualFilename, !af.isEmpty {
                         self.tasks[idx].filename = (af as NSString).lastPathComponent
                     }

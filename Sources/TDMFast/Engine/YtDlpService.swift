@@ -77,8 +77,7 @@ public class YtDlpService {
         process.executableURL = URL(fileURLWithPath: binary)
         var args = ["-J", "--flat-playlist", "--no-warnings", url]
 
-        if settings.proxyEnabled {
-            let proxyURL = "\(settings.proxyType)://\(settings.proxyHost):\(settings.proxyPort)"
+        if let proxyURL = ProxyHelper.resolveProxyUrl(userSettings: settings) {
             args.append(contentsOf: ["--proxy", proxyURL])
         }
 
@@ -139,7 +138,7 @@ public class YtDlpService {
     public func runDownload(
         task: DownloadTask,
         settings: AppSettings,
-        progressHandler: @escaping (Int64, Int64, Int64, String?) -> Void,
+        progressHandler: @escaping (Int64, Int64, Int64, Int64, String?) -> Void,
         terminationHandler: @escaping (Bool, String?) -> Void
     ) -> Process? {
         guard let binary = resolveYtDlpPath(customPath: settings.ytDlpCustomPath) else {
@@ -167,10 +166,19 @@ public class YtDlpService {
             args.append(contentsOf: ["-f", "bestvideo+bestaudio/best"])
         }
 
-        if settings.proxyEnabled {
-            let proxyURL = "\(settings.proxyType)://\(settings.proxyHost):\(settings.proxyPort)"
+        if let proxyURL = ProxyHelper.resolveProxyUrl(userSettings: settings) {
             args.append(contentsOf: ["--proxy", proxyURL])
         }
+
+        let fragments = min(max(task.connections, 4), 16)
+        args.append(contentsOf: [
+            "--concurrent-fragments", "\(fragments)",
+            "--retries", "10",
+            "--fragment-retries", "10",
+            "--socket-timeout", "30",
+            "--buffer-size", "1024k",
+            "--http-chunk-size", "10M"
+        ])
 
         args.append(task.url)
         process.arguments = args
@@ -193,7 +201,7 @@ public class YtDlpService {
                     let speed = Int64(Double(parts[2]) ?? 0)
                     let eta = Int64(parts[3]) ?? 0
                     let actualFilename = parts.count >= 5 ? String(parts[4]) : nil
-                    progressHandler(downloaded, total, speed, actualFilename)
+                    progressHandler(downloaded, total, speed, eta, actualFilename)
                 }
             }
         }

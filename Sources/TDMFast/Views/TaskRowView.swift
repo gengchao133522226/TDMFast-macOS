@@ -19,10 +19,24 @@ public struct TaskRowView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
 
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         Text(statusDescription)
-                            .font(.system(size: 11))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(statusColor)
+
+                        HStack(spacing: 3) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 9))
+                            Text(threadDescription)
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        }
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(
+                            Capsule()
+                                .fill(Color.blue.opacity(0.12))
+                        )
+                        .foregroundStyle(.blue)
 
                         if task.status == .downloading && task.speed > 0 {
                             Text("•")
@@ -109,6 +123,44 @@ public struct TaskRowView: View {
                 ProgressView(value: task.totalBytes > 0 ? Double(task.downloadedBytes) : 0, total: Double(max(task.totalBytes, 1)))
                     .progressViewStyle(.linear)
 
+                if let segments = task.segmentProgress, segments.count > 1 {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 2) {
+                            ForEach(0..<segments.count, id: \.self) { idx in
+                                GeometryReader { geo in
+                                    ZStack(alignment: .leading) {
+                                        RoundedRectangle(cornerRadius: 1.5)
+                                            .fill(Color(nsColor: .separatorColor).opacity(0.25))
+                                        RoundedRectangle(cornerRadius: 1.5)
+                                            .fill(
+                                                LinearGradient(
+                                                    colors: [Color.cyan, Color.blue],
+                                                    startPoint: .leading,
+                                                    endPoint: .trailing
+                                                )
+                                            )
+                                            .frame(width: geo.size.width * CGFloat(max(0.0, min(1.0, segments[idx]))))
+                                    }
+                                }
+                                .frame(height: 5)
+                            }
+                        }
+                        .frame(height: 5)
+
+                        HStack {
+                            Text("多线程分段状态 (\(segments.count) 线程并行)")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            let completedCount = segments.filter { $0 >= 0.999 }.count
+                            Text("\(completedCount)/\(segments.count) 段就绪")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top, 1)
+                }
+
                 HStack {
                     Text("\(formatBytes(task.downloadedBytes)) / \(task.totalBytes > 0 ? formatBytes(task.totalBytes) : "未知大小")")
                         .font(.system(size: 10, design: .monospaced))
@@ -123,6 +175,15 @@ public struct TaskRowView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private var threadDescription: String {
+        if task.kind == "ytdlp" {
+            let frags = min(max(task.connections, 4), 16)
+            return "\(frags) 片段并发"
+        } else {
+            return "\(task.connections) 线程"
+        }
     }
 
     private var statusDescription: String {
