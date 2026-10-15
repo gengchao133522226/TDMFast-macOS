@@ -59,35 +59,45 @@ TDMFast-macOS/
 
 ---
 
-## 🚀 编译与运行 (macOS)
+## 🚀 安装与运行 (macOS)
 
-### 1. 环境准备
+### 1. 一键全自动安装（推荐，一并安装 FFmpeg 与 yt-dlp）
 
-推荐在 macOS 13+ (Ventura / Sonoma / Sequoia) 上运行：
+本项目提供了全自动配置脚本，会自动通过 Homebrew 检查并安装 `ffmpeg` 与 `yt-dlp` 依赖、编译 Release 版本并将 `TDM Fast.app` 自动安装至系统的 `/Applications`（应用程序）目录：
+
 ```bash
-# 安装 Xcode Command Line Tools
-xcode-select --install
+chmod +x install.sh
+./install.sh
+```
 
-# 推荐通过 Homebrew 安装流媒体解析依赖（yt-dlp 和 ffmpeg）
+---
+
+### 2. 核心流媒体依赖与 FFmpeg 说明
+
+本项目流媒体解析基于 `yt-dlp` 与 `ffmpeg`：
+- **为什么需要 FFmpeg？**
+  - **音视频分离合并**：主流平台（如 YouTube、B 站、X/Twitter 等）的 1080P、2K、4K 等高分辨率视频，其服务器上视频轨与音频轨是**完全分离存放**的。`yt-dlp` 下载完成后必须依赖 `ffmpeg` 进行多轨无损合流。
+  - **默认自动封装为 `.mp4` 格式**：现代平台的高清视频多采用 VP9/AV1 编码（默认容器为 `.webm`，macOS 自带 QuickTime 默认无法直接播放）。本项目内部已配置自动调用 `ffmpeg` 执行 `--merge-output-format mp4`，**下载合并后会自动输出为通用的 `.mp4` 格式**，无需额外手动转码即可在 Mac 访达、QuickTime、手机相册中流畅播放！
+
+若希望手动安装流媒体依赖：
+```bash
+# 推荐通过 Homebrew 一键安装
 brew install yt-dlp ffmpeg
 ```
 
-### 2. 使用命令行直接编译与运行
+---
 
-在项目根目录下执行：
+### 3. 手动编译与运行（可选）
+
+如果你喜欢手动编译或调试：
 ```bash
-# 编译 Release 版本
+# 1. 编译 Release 原生版本
 swift build -c release
 
-# 直接启动应用
+# 2. 命令行直接启动
 swift run -c release TDMFast
-```
 
-### 3. 生成 Xcode 工程（可选）
-
-如果你喜欢使用 Xcode 进行界面调试或打包：
-```bash
-# 使用 Xcode 直接打开 Package.swift 即可
+# 3. 或使用 Xcode 打开项目
 open Package.swift
 ```
 

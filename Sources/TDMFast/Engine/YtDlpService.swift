@@ -158,6 +158,7 @@ public class YtDlpService {
 
         if let ffmpegDir = resolveFfmpegDir(customPath: settings.ffmpegCustomPath) {
             args.append(contentsOf: ["--ffmpeg-location", ffmpegDir])
+            args.append(contentsOf: ["--merge-output-format", "mp4"])
         }
 
         if let selector = task.formatSelector, !selector.isEmpty {
