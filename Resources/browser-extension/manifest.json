@@ -1,0 +1,37 @@
+{
+   "action": {
+      "default_icon": {
+         "128": "icons/128.png",
+         "16": "icons/16.png",
+         "48": "icons/48.png"
+      },
+      "default_popup": "popup.html",
+      "default_title": "TDM Fast 嗅探"
+   },
+   "background": {
+      "service_worker": "background.js"
+   },
+   "content_scripts": [ {
+      "all_frames": true,
+      "js": [ "content.js" ],
+      "matches": [ "\u003Call_urls>" ],
+      "run_at": "document_idle"
+   } ],
+   "description": "TDM Fast Download Manager 的浏览器助手：接管下载链接，嗅探网页视频/音频/文件，支持 YouTube、X、B站等主流平台。",
+   "host_permissions": [ "\u003Call_urls>", "http://127.0.0.1:37651/*" ],
+   "icons": {
+      "128": "icons/128.png",
+      "16": "icons/16.png",
+      "48": "icons/48.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAklvYQ3c75wfRzYXcMBFiXFw0zv7zqVYX7mj65HsWywvaiP7YlJ5hQSKIibbveDmFZhr2ryBAFsM94qGVbRytBQdEoJrwlbbRnA9zKr5CxWX9h65Q8JSpQVajWTiosouhVCXek7Rwc+KTzJKMbMUa2JznD5wcD9fUIxCG1SkK8528Psgo4ToA/Xz5TGjWj5YgM4Leq9hlipMKhXtMBIYGg7rkBgai+SoV5Y/udAbib4oPdPXBZI81axt4HRezpENTY0A6MtqNDHNEZ5xBSI8Go3ZpGkXGlU+x4YYL777dtCK3wjwOKHp3a45tsKrKCNvUdujntjFHOM1xKoAEQ99gBQIDAQAB",
+   "manifest_version": 3,
+   "name": "TDM Fast 资源嗅探",
+   "permissions": [ "webRequest", "downloads", "contextMenus", "storage", "notifications", "tabs", "webNavigation" ],
+   "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
+   "version": "4.6.0",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "inject.js" ]
+   } ]
+}

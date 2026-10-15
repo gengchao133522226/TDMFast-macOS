@@ -100,7 +100,18 @@ open Package.swift
 2. 当浏览器扩展检测到下载或视频时，将请求转发给本地程序，自动唤起“新建下载”或“清晰度选择”窗口。
 3. 即使程序未预先开启，浏览器通过网页点击 `tdmfast://` 协议链接时，macOS 会自动唤起本应用并将任务参数传递给下载引擎。
 
-### 🔗 官方浏览器嗅探扩展下载地址
+### 🔗 官方浏览器嗅探扩展下载与安装
 
-- **Microsoft Edge 加载项商店**：[TDM Fast 资源嗅探 - Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/fbhfbpinjmjhleidkgfjokfkcjgkjjkh)
-- **Google Chrome / 其他 Chromium 浏览器**：可直接通过 Edge 加载项商店安装，或访问官方网站 [tdmfast.com](https://tdmfast.com) 获取扩展程序。
+本插件为 Chromium 通用扩展（Manifest V3），同时完美支持 **Google Chrome** 与 **Microsoft Edge**：
+
+#### 方案一：在 Chrome / Edge 中直接一键安装（推荐）
+1. 在浏览器（Chrome 或 Edge 均可）中直接打开：[TDM Fast 资源嗅探 - Edge Add-ons 商店](https://microsoftedge.microsoft.com/addons/detail/fbhfbpinjmjhleidkgfjokfkcjgkjjkh)；
+2. 如果是在 **Google Chrome** 中打开，页面顶部会提示 *“允许来自其他应用商店的扩展程序”*，点击允许；
+3. 点击右侧蓝色的 **“获取”**（或“添加至 Chrome”）按钮即可一键完成安装。
+
+#### 方案二：通过本地离线包导入（Chrome / Brave / Vivaldi 等）
+本项目已在 [`Resources/browser-extension`](Resources/browser-extension) 内置了提取好的完整解压版扩展：
+1. 打开 Chrome 并在地址栏输入：`chrome://extensions/`
+2. 打开右上角的 **“开发者模式”**（Developer mode）开关；
+3. 点击左上角 **“加载已解压的扩展程序”**（Load unpacked）；
+4. 选择本项目目录下的 `Resources/browser-extension` 文件夹，即可直接导入使用。
