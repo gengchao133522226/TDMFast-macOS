@@ -172,9 +172,11 @@ public class YtDlpService {
 
         let fragments = min(max(task.connections, 4), 16)
         args.append(contentsOf: [
+            "--continue",
+            "--part",
             "--concurrent-fragments", "\(fragments)",
-            "--retries", "10",
-            "--fragment-retries", "10",
+            "--retries", "20",
+            "--fragment-retries", "20",
             "--socket-timeout", "30",
             "--buffer-size", "1024k",
             "--http-chunk-size", "10M"

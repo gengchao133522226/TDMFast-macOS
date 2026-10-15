@@ -118,21 +118,32 @@ public class DownloadManager: ObservableObject {
                     tasks.first(where: { $0.id == task.id })?.filename ?? task.filename
                 )
 
+                let existingSegments = self.tasks.first(where: { $0.id == task.id })?.segments
+
                 try await downloader.download(
                     url: probe.finalURL,
                     destinationPath: destPath,
                     totalBytes: probe.totalBytes,
                     connections: task.connections,
-                    customHeaders: task.customHeaders
-                ) { [weak self] downloaded, speed, eta, segmentProgress in
-                    Task { @MainActor [weak self] in
-                        guard let self = self, let idx = self.tasks.firstIndex(where: { $0.id == task.id }) else { return }
-                        self.tasks[idx].downloadedBytes = downloaded
-                        self.tasks[idx].speed = speed
-                        self.tasks[idx].etaSeconds = eta
-                        self.tasks[idx].segmentProgress = segmentProgress
+                    customHeaders: task.customHeaders,
+                    existingSegments: existingSegments,
+                    progressUpdate: { [weak self] downloaded, speed, eta, segmentProgress in
+                        Task { @MainActor [weak self] in
+                            guard let self = self, let idx = self.tasks.firstIndex(where: { $0.id == task.id }) else { return }
+                            self.tasks[idx].downloadedBytes = downloaded
+                            self.tasks[idx].speed = speed
+                            self.tasks[idx].etaSeconds = eta
+                            self.tasks[idx].segmentProgress = segmentProgress
+                        }
+                    },
+                    segmentPersistence: { [weak self] currentSegments in
+                        Task { @MainActor [weak self] in
+                            guard let self = self, let idx = self.tasks.firstIndex(where: { $0.id == task.id }) else { return }
+                            self.tasks[idx].segments = currentSegments
+                            self.saveTasks()
+                        }
                     }
-                }
+                )
 
                 if let idx = self.tasks.firstIndex(where: { $0.id == task.id }) {
                     self.tasks[idx].status = .completed
@@ -145,10 +156,12 @@ public class DownloadManager: ObservableObject {
                 }
             } catch {
                 if let idx = self.tasks.firstIndex(where: { $0.id == task.id }) {
-                    self.tasks[idx].status = .failed
-                    self.tasks[idx].speed = 0
-                    self.tasks[idx].errorMessage = error.localizedDescription
-                    self.saveTasks()
+                    if self.tasks[idx].status != .paused {
+                        self.tasks[idx].status = .failed
+                        self.tasks[idx].speed = 0
+                        self.tasks[idx].errorMessage = error.localizedDescription
+                        self.saveTasks()
+                    }
                 }
             }
             self.activeHttpDownloaders.removeValue(forKey: task.id)

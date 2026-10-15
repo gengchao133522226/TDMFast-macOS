@@ -18,6 +18,7 @@ public struct DownloadTask: Identifiable, Codable {
     public var errorMessage: String?
     public var customHeaders: [String: String]?
     public var segmentProgress: [Double]?
+    public var segments: [FileSegment]?
 
     public var progress: Double {
         guard totalBytes > 0 else { return 0.0 }
@@ -70,5 +71,6 @@ public struct DownloadTask: Identifiable, Codable {
         self.createdAt = Date()
         self.customHeaders = customHeaders
         self.segmentProgress = nil
+        self.segments = nil
     }
 }
