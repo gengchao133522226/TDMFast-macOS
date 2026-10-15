@@ -6,3 +6,4 @@ xcuserdata/
 *.xcworkspace
 DerivedData/
 .swiftpm/
+*.dmg
