@@ -110,8 +110,11 @@ open Package.swift
 3. 点击右侧蓝色的 **“获取”**（或“添加至 Chrome”）按钮即可一键完成安装。
 
 #### 方案二：通过本地离线包导入（Chrome / Brave / Vivaldi 等）
-本项目已在 [`Resources/browser-extension`](Resources/browser-extension) 内置了提取好的完整解压版扩展：
-1. 打开 Chrome 并在地址栏输入：`chrome://extensions/`
-2. 打开右上角的 **“开发者模式”**（Developer mode）开关；
-3. 点击左上角 **“加载已解压的扩展程序”**（Load unpacked）；
-4. 选择本项目目录下的 `Resources/browser-extension` 文件夹，即可直接导入使用。
+本项目已在代码仓库中直接内置了开箱即用的插件包：
+- **离线 Zip 安装包下载**：[browser-extension.zip](Resources/browser-extension.zip)（或解压目录 [`Resources/browser-extension`](Resources/browser-extension)）
+
+**安装步骤**：
+1. 下载并解压 `browser-extension.zip`（若直接拉取了仓库代码则直接使用 `Resources/browser-extension` 目录）；
+2. 打开 Chrome 并在地址栏输入：`chrome://extensions/`
+3. 打开右上角的 **“开发者模式”**（Developer mode）开关；
+4. 点击左上角 **“加载已解压的扩展程序”**（Load unpacked），选择该文件夹即可直接导入使用（亦可直接将文件夹拖入 Chrome 扩展管理窗口）。

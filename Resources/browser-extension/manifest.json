@@ -28,7 +28,6 @@
    "manifest_version": 3,
    "name": "TDM Fast 资源嗅探",
    "permissions": [ "webRequest", "downloads", "contextMenus", "storage", "notifications", "tabs", "webNavigation" ],
-   "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
    "version": "4.6.0",
    "web_accessible_resources": [ {
       "matches": [ "\u003Call_urls>" ],
