@@ -59,20 +59,36 @@ TDMFast-macOS/
 
 ---
 
-## 🚀 安装与运行 (macOS)
+## 🚀 下载与安装 (macOS)
 
-### 1. 一键全自动安装（推荐，一并安装 FFmpeg 与 yt-dlp）
+### 1. 免编译直接安装（推荐，无需 12GB Xcode）
 
-本项目提供了全自动配置脚本，会自动通过 Homebrew 检查并安装 `ffmpeg` 与 `yt-dlp` 依赖、编译 Release 版本并将 `TDM Fast.app` 自动安装至系统的 `/Applications`（应用程序）目录：
+普通用户**无需**在电脑上安装庞大的完整版 Xcode（约 12GB），直接下载官方预编译好的 DMG 镜像即可：
 
-```bash
-chmod +x install.sh
-./install.sh
-```
+👉 **[下载最新版 TDM-Fast-macOS.dmg](https://github.com/gengchao133522226/TDMFast-macOS/releases/latest/download/TDM-Fast-macOS.dmg)**
+
+**安装方法**：
+1. 双击下载好的 `TDM-Fast-macOS.dmg` 打开；
+2. 将 **TDM Fast** 图标直接拖拽到旁边的 **Applications（应用程序）** 文件夹即可！
+
+> 💡 **关于流媒体视频解析**：
+> 如果需要下载 YouTube、B 站等流媒体高清视频，请在终端执行一次以下命令（无需 Xcode，只需通过 Homebrew 安装流媒体合流工具）：
+> ```bash
+> brew install yt-dlp ffmpeg
+> ```
 
 ---
 
-### 2. 核心流媒体依赖与 FFmpeg 说明
+### 2. 源码本地编译与全自动构建脚本（开发者可选）
+
+> ⚠️ **编译提示**：如果选择自行从源码编译，因苹果官方 SDK 机制限制，macOS 纯 Command Line Tools 会报 `unable to lookup item 'PlatformPath'` 错误，**本地源码编译需要机器安装了完整的 Xcode**。若没有安装 Xcode，请直接使用上方的 **[DMG 直接安装]**。
+
+如果您本机安装了完整 Xcode 并希望从源码构建：
+```bash
+# 一键自动构建并安装至 /Applications
+chmod +x install.sh
+./install.sh
+```
 
 本项目流媒体解析基于 `yt-dlp` 与 `ffmpeg`：
 - **为什么需要 FFmpeg？**

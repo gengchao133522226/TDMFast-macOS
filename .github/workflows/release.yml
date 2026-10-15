@@ -1,0 +1,47 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build TDMFast Release
+        run: |
+          swift build -c release
+
+      - name: Package App & DMG
+        run: |
+          mkdir -p "dist/TDM Fast.app/Contents/MacOS" "dist/TDM Fast.app/Contents/Resources"
+          cp .build/release/TDMFast "dist/TDM Fast.app/Contents/MacOS/TDMFast"
+          chmod +x "dist/TDM Fast.app/Contents/MacOS/TDMFast"
+          cp Resources/Info.plist "dist/TDM Fast.app/Contents/Info.plist"
+          if [ -f Resources/AppIcon.icns ]; then
+            cp Resources/AppIcon.icns "dist/TDM Fast.app/Contents/Resources/AppIcon.icns"
+          fi
+          codesign --force --deep --sign - "dist/TDM Fast.app"
+          
+          mkdir -p dmg_staging
+          cp -R "dist/TDM Fast.app" dmg_staging/
+          ln -s /Applications dmg_staging/Applications
+          hdiutil create -volname "TDM Fast" -srcfolder dmg_staging -ov -format UDZO "TDM-Fast-macOS.dmg"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            TDM-Fast-macOS.dmg
+            Resources/browser-extension.zip
