@@ -131,15 +131,20 @@ public struct TaskRowView: View {
                                     ZStack(alignment: .leading) {
                                         RoundedRectangle(cornerRadius: 1.5)
                                             .fill(Color(nsColor: .separatorColor).opacity(0.25))
-                                        RoundedRectangle(cornerRadius: 1.5)
-                                            .fill(
-                                                LinearGradient(
-                                                    colors: [Color.cyan, Color.blue],
-                                                    startPoint: .leading,
-                                                    endPoint: .trailing
+
+                                        let segProg = segments[idx]
+                                        if segProg > 0.0 {
+                                            let displayWidth = max(geo.size.width * CGFloat(min(1.0, segProg)), 3.0)
+                                            RoundedRectangle(cornerRadius: 1.5)
+                                                .fill(
+                                                    LinearGradient(
+                                                        colors: [Color.cyan, Color.blue],
+                                                        startPoint: .leading,
+                                                        endPoint: .trailing
+                                                    )
                                                 )
-                                            )
-                                            .frame(width: geo.size.width * CGFloat(max(0.0, min(1.0, segments[idx]))))
+                                                .frame(width: min(geo.size.width, displayWidth))
+                                        }
                                     }
                                 }
                                 .frame(height: 5)
@@ -148,12 +153,13 @@ public struct TaskRowView: View {
                         .frame(height: 5)
 
                         HStack {
-                            Text("多线程分段状态 (\(segments.count) 线程并行)")
+                            let activeCount = segments.filter { $0 > 0.0 && $0 < 0.999 }.count
+                            let completedCount = segments.filter { $0 >= 0.999 }.count
+                            Text("多线程分段 (\(segments.count) 线程并行 • \(activeCount) 路活跃)")
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                             Spacer()
-                            let completedCount = segments.filter { $0 >= 0.999 }.count
-                            Text("\(completedCount)/\(segments.count) 段就绪")
+                            Text("\(completedCount)/\(segments.count) 段完成")
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.secondary)
                         }

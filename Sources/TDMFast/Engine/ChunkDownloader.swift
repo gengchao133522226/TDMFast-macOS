@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-/// High-performance chunk downloader using URLSessionDataDelegate + POSIX pwrite
+/// High-performance chunk downloader using independent connections, URLSessionDataDelegate block streaming, and POSIX atomic pwrite
 public actor ChunkDownloader {
     public struct ProbeResult {
         public let finalURL: URL
@@ -11,17 +11,14 @@ public actor ChunkDownloader {
     }
 
     private let taskId: String
+    private let proxyConfiguration: AppSettings?
     private var isCancelled = false
     private var isPaused = false
-    private var session: URLSession?
-    private let sessionDelegate = ChunkSessionDelegate()
-    private var activeDataTasks: [URLSessionDataTask] = []
+    private var activeSessions: [URLSession] = []
 
     public init(taskId: String, proxyConfiguration: AppSettings? = nil) {
         self.taskId = taskId
-        let config = URLSessionConfiguration.default
-        ProxyHelper.apply(to: config, userSettings: proxyConfiguration)
-        self.session = URLSession(configuration: config, delegate: self.sessionDelegate, delegateQueue: nil)
+        self.proxyConfiguration = proxyConfiguration
     }
 
     public static func probe(
@@ -120,6 +117,7 @@ public actor ChunkDownloader {
     ) async throws {
         isCancelled = false
         isPaused = false
+        activeSessions.removeAll()
 
         let destURL = URL(fileURLWithPath: destinationPath)
         let parentDir = destURL.deletingLastPathComponent()
@@ -164,22 +162,26 @@ public actor ChunkDownloader {
         customHeaders: [String: String]?,
         progressUpdate: @escaping (Int64, Int64, Int64, [Double]) -> Void
     ) async throws {
-        guard let session = self.session else { throw URLError(.cancelled) }
-
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
         if let custom = customHeaders {
             for (k, v) in custom { request.setValue(v, forHTTPHeaderField: k) }
         }
 
+        let config = URLSessionConfiguration.ephemeral
+        ProxyHelper.apply(to: config, userSettings: self.proxyConfiguration)
+
+        let delegate = SegmentDataDelegate()
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        self.activeSessions.append(session)
+        defer { session.finishTasksAndInvalidate() }
+
         let tracker = ChunkProgressTracker(totalBytes: totalBytes, segmentCount: 1, progressUpdate: progressUpdate)
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var currentOffset: Int64 = 0
-            let task = session.dataTask(with: request)
-            self.activeDataTasks = [task]
 
-            sessionDelegate.register(taskId: task.taskIdentifier, onResponse: { _ in }, onData: { data in
+            delegate.onData = { data in
                 let count = data.count
                 guard count > 0 else { return }
                 data.withUnsafeBytes { raw in
@@ -196,14 +198,17 @@ public actor ChunkDownloader {
                         deltaBytes: Int64(count)
                     )
                 }
-            }, onCompletion: { error in
+            }
+
+            delegate.onCompletion = { error in
                 if let err = error {
                     continuation.resume(throwing: err)
                 } else {
                     continuation.resume(returning: ())
                 }
-            })
+            }
 
+            let task = session.dataTask(with: request)
             task.resume()
         }
 
@@ -279,7 +284,6 @@ public actor ChunkDownloader {
                 if attempt > maxRetries || isPaused || isCancelled {
                     throw error
                 }
-                // Exponential backoff before retry (500ms, 1000ms...)
                 try? await Task.sleep(nanoseconds: UInt64(attempt * 500_000_000))
             }
         }
@@ -294,7 +298,7 @@ public actor ChunkDownloader {
         tracker: ChunkProgressTracker,
         onBytesReceived: @escaping (Int64) -> Void
     ) async throws {
-        guard let session = self.session else { throw URLError(.cancelled) }
+        if isPaused || isCancelled { return }
 
         let segmentStart = segment.startOffset + startFrom
         if segmentStart > segment.endOffset { return }
@@ -307,15 +311,19 @@ public actor ChunkDownloader {
         }
 
         let totalSegmentLength = segment.endOffset - segment.startOffset + 1
+        let config = URLSessionConfiguration.ephemeral
+        ProxyHelper.apply(to: config, userSettings: self.proxyConfiguration)
+
+        let delegate = SegmentDataDelegate()
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        self.activeSessions.append(session)
+        defer { session.finishTasksAndInvalidate() }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var currentOffset = segmentStart
             var currentSegmentDownloaded = startFrom
 
-            let task = session.dataTask(with: request)
-            self.activeDataTasks.append(task)
-
-            sessionDelegate.register(taskId: task.taskIdentifier, onResponse: { _ in }, onData: { data in
+            delegate.onData = { data in
                 let count = data.count
                 guard count > 0 else { return }
 
@@ -336,84 +344,46 @@ public actor ChunkDownloader {
                         deltaBytes: Int64(count)
                     )
                 }
-            }, onCompletion: { error in
+            }
+
+            delegate.onCompletion = { error in
                 if let err = error {
                     continuation.resume(throwing: err)
                 } else {
                     continuation.resume(returning: ())
                 }
-            })
+            }
 
+            let task = session.dataTask(with: request)
             task.resume()
         }
     }
 
     public func pause() {
         isPaused = true
-        for task in activeDataTasks {
-            task.cancel()
+        for s in activeSessions {
+            s.invalidateAndCancel()
         }
-        activeDataTasks.removeAll()
+        activeSessions.removeAll()
     }
 
     public func cancel() {
         isCancelled = true
         pause()
-        session?.invalidateAndCancel()
     }
 }
 
-/// Thread-safe URLSessionDataDelegate handling streaming data chunks
-final class ChunkSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private struct Callbacks {
-        var onResponse: ((HTTPURLResponse) -> Void)?
-        var onData: ((Data) -> Void)?
-        var onCompletion: ((Error?) -> Void)?
-    }
-
-    private let lock = NSLock()
-    private var callbacks: [Int: Callbacks] = [:]
-
-    func register(
-        taskId: Int,
-        onResponse: ((HTTPURLResponse) -> Void)? = nil,
-        onData: @escaping (Data) -> Void,
-        onCompletion: @escaping (Error?) -> Void
-    ) {
-        lock.lock()
-        callbacks[taskId] = Callbacks(onResponse: onResponse, onData: onData, onCompletion: onCompletion)
-        lock.unlock()
-    }
-
-    func unregister(taskId: Int) {
-        lock.lock()
-        callbacks.removeValue(forKey: taskId)
-        lock.unlock()
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        if let http = response as? HTTPURLResponse {
-            lock.lock()
-            let cb = callbacks[dataTask.taskIdentifier]?.onResponse
-            lock.unlock()
-            cb?(http)
-        }
-        completionHandler(.allow)
-    }
+/// Thread-safe URLSessionDataDelegate handling streaming data chunks for an individual connection
+final class SegmentDataDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    var onData: ((Data) -> Void)?
+    var onCompletion: ((Error?) -> Void)?
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        lock.lock()
-        let cb = callbacks[dataTask.taskIdentifier]?.onData
-        lock.unlock()
-        cb?(data)
+        onData?(data)
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        lock.lock()
-        let cb = callbacks[task.taskIdentifier]?.onCompletion
-        callbacks.removeValue(forKey: task.taskIdentifier)
-        lock.unlock()
-        cb?(error)
+        onCompletion?(error)
     }
 }
 
