@@ -255,7 +255,7 @@ public actor ChunkDownloader {
             }
             try await group.waitForAll()
         }
-        progressTracker.finish()
+        await progressTracker.finish()
     }
 
     private func downloadSegment(
